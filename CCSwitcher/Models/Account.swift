@@ -2,7 +2,7 @@ import Foundation
 
 // MARK: - Provider Type (extensible for Gemini, Codex, etc.)
 
-enum AIProviderType: String, Codable, CaseIterable, Identifiable {
+enum AIProviderType: String, Codable, CaseIterable, Identifiable, Sendable {
     case claudeCode = "Claude Code"
     case gemini = "Gemini"
     case codex = "Codex"
@@ -28,7 +28,7 @@ enum AIProviderType: String, Codable, CaseIterable, Identifiable {
 
 // MARK: - Account Model
 
-struct Account: Identifiable, Codable, Hashable {
+struct Account: Identifiable, Codable, Hashable, Sendable {
     let id: UUID
     var email: String
     var displayName: String
@@ -117,7 +117,7 @@ struct Account: Identifiable, Codable, Hashable {
 /// profile in `~/.config/anthropic`, or a third-party provider (Bedrock, Vertex,
 /// …). Callers must therefore treat a missing `email` as "identity unavailable",
 /// never as "a different account is active".
-struct AuthStatus: Codable {
+struct AuthStatus: Codable, Sendable {
     let loggedIn: Bool
     let authMethod: String?
     let apiProvider: String?

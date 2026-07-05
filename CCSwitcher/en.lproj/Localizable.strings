@@ -9,6 +9,9 @@
 "Refresh" = "Refresh";
 "Settings" = "Settings";
 "Quit" = "Quit";
+"External auth manager" = "External auth manager";
+"Sync to Orca" = "Sync to Orca";
+"Dismiss" = "Dismiss";
 
 /* Settings - General */
 "General" = "General";
@@ -55,6 +58,7 @@
 "Token expired. Switch to this account in Claude Code to refresh." = "Token expired. Switch to this account in Claude Code to refresh.";
 "Session" = "Session";
 "Weekly" = "Weekly";
+"Fable" = "Fable";
 "Extra usage" = "Extra usage";
 "On" = "On";
 "Off" = "Off";
@@ -88,6 +92,8 @@
 "Login New Account" = "Login New Account";
 "Add Current Account" = "Add Current Account";
 "Waiting for browser login..." = "Waiting for browser login...";
+"Waiting for Claude Code browser login..." = "Waiting for Claude Code browser login...";
+"Updating Claude Code credentials..." = "Updating Claude Code credentials...";
 "Complete the login in your browser, then return here." = "Complete the login in your browser, then return here.";
 "This will capture the currently logged-in Claude Code account." = "This will capture the currently logged-in Claude Code account.";
 "Cancel" = "Cancel";
@@ -137,6 +143,15 @@
 "Token expired. Switch to this account to refresh." = "Token expired. Switch to this account to refresh.";
 "API Rate Limited. Try again later." = "API Rate Limited. Try again later.";
 "Could not fetch usage: %@" = "Could not fetch usage: %@";
+"Another Claude Code auth operation is already running." = "Another Claude Code auth operation is already running.";
+"Claude Code browser login is already in progress." = "Claude Code browser login is already in progress.";
+"Claude Code auth login is still running. Finish or cancel it before switching accounts." = "Claude Code auth login is still running. Finish or cancel it before switching accounts.";
+"Capturing Claude Code account..." = "Capturing Claude Code account...";
+"Switching Claude Code account..." = "Switching Claude Code account...";
+"Claude Code active account changed. Refresh before switching again." = "Claude Code active account changed. Refresh before switching again.";
+"Current Orca account %@ is not in CCSwitcher. Add Current Account first." = "Current Orca account %@ is not in CCSwitcher. Add Current Account first.";
+"Orca changed Claude Code from %@ to %@. CCSwitcher synced to the live account." = "Orca changed Claude Code from %1$@ to %2$@. CCSwitcher synced to the live account.";
+"Orca changed Claude Code from %@ to %@. Add Current Account first to track it in CCSwitcher." = "Orca changed Claude Code from %1$@ to %2$@. Add Current Account first to track it in CCSwitcher.";
 
 /* Promo */
 "%@ - %@ (Weekdays) & Weekends" = "%@ - %@ (Weekdays) & Weekends";

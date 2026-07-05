@@ -2,19 +2,68 @@ import Foundation
 
 private let log = FileLog("Claude")
 
+private final class LockedDataBuffer: @unchecked Sendable {
+    private let lock = NSLock()
+    private var data = Data()
+
+    func append(_ chunk: Data) {
+        lock.lock()
+        data.append(chunk)
+        lock.unlock()
+    }
+
+    func snapshot() -> Data {
+        lock.lock()
+        defer { lock.unlock() }
+        return data
+    }
+}
+
 /// UserDefaults key holding the user's preferred Claude CLI path (empty = auto).
 let kClaudeBinaryPathPreferenceKey = "claudeBinaryPathPreference"
 
 /// A claude binary discovered on this Mac.
-struct DetectedClaudePath: Hashable, Identifiable {
+struct DetectedClaudePath: Hashable, Identifiable, Sendable {
     let path: String
     let label: String
     var id: String { path }
 }
 
+/// A running `claude auth login` process that can overwrite Claude Code auth.
+struct ClaudeAuthProcess: Hashable, Identifiable, Sendable {
+    let pid: Int32
+    let parentPid: Int32
+    let elapsed: String
+    let command: String
+
+    var id: Int32 { pid }
+}
+
+/// A Claude Desktop Code Mode runner that consumes the global CLI credential.
+struct ClaudeCodeSessionProcess: Hashable, Identifiable, Sendable {
+    let pid: Int32
+    let parentPid: Int32
+    let elapsed: String
+    let source: String
+    let command: String
+
+    var id: Int32 { pid }
+}
+
+private struct ProcessSnapshot: Sendable {
+    let pid: Int32
+    let parentPid: Int32
+    let elapsed: String
+    let command: String
+}
+
 /// Interacts with the Claude CLI to get auth status and manage accounts.
 final class ClaudeService: @unchecked Sendable {
     static let shared = ClaudeService()
+
+    private static let authStatusTimeout: TimeInterval = 20
+    private static let loginTimeout: TimeInterval = 300
+    private static let defaultCommandTimeout: TimeInterval = 60
 
     private let lock = NSLock()
     private var _claudePath: String
@@ -111,6 +160,127 @@ final class ClaudeService: @unchecked Sendable {
         return result
     }
 
+    /// Returns running browser-login flows. These are dangerous during account
+    /// switching because a completed OAuth callback rewrites Claude Code's
+    /// global keychain entry and `~/.claude.json`.
+    static func activeAuthLoginProcesses() -> [ClaudeAuthProcess] {
+        processSnapshots(logPrefix: "activeAuthLoginProcesses")
+            .compactMap(parseAuthLoginProcess)
+    }
+
+    /// Returns running Claude Desktop Code Mode sessions. Desktop's app login
+    /// domain is separate, but its embedded runner still uses the global Claude
+    /// Code credential and can be disrupted by account switching.
+    ///
+    /// Standalone terminal `claude` sessions are intentionally not blocked here:
+    /// they are normal Claude Code consumers, not Desktop-owned runners. Switching
+    /// can affect their next request, but blocking every interactive CLI session
+    /// makes the menu feel stuck for common workflows.
+    static func activeClaudeCodeSessionProcesses() -> [ClaudeCodeSessionProcess] {
+        processSnapshots(logPrefix: "activeClaudeCodeSessionProcesses")
+            .compactMap(parseClaudeCodeSessionProcess)
+    }
+
+    private static func processSnapshots(logPrefix: String) -> [ProcessSnapshot] {
+        let process = Process()
+        let pipe = Pipe()
+        let outputBuffer = LockedDataBuffer()
+        process.executableURL = URL(fileURLWithPath: "/bin/ps")
+        process.arguments = ["-axo", "pid=,ppid=,etime=,command="]
+        process.standardOutput = pipe
+        process.standardError = FileHandle.nullDevice
+
+        pipe.fileHandleForReading.readabilityHandler = { handle in
+            let data = handle.availableData
+            guard !data.isEmpty else { return }
+            outputBuffer.append(data)
+        }
+        defer {
+            pipe.fileHandleForReading.readabilityHandler = nil
+        }
+
+        do {
+            try process.run()
+            let deadline = Date().addingTimeInterval(3)
+            while process.isRunning && Date() < deadline {
+                Thread.sleep(forTimeInterval: 0.05)
+            }
+            if process.isRunning {
+                process.terminate()
+                log.warning("[\(logPrefix)] ps exceeded 3s timeout; ignoring preflight result")
+                process.waitUntilExit()
+                return []
+            }
+            process.waitUntilExit()
+            guard process.terminationStatus == 0 else { return [] }
+        } catch {
+            log.error("[\(logPrefix)] ps failed: \(error.localizedDescription)")
+            return []
+        }
+
+        let output = String(data: outputBuffer.snapshot(), encoding: .utf8) ?? ""
+        return output
+            .split(whereSeparator: \.isNewline)
+            .compactMap { parseProcessSnapshotLine(String($0)) }
+    }
+
+    private static func parseProcessSnapshotLine(_ line: String) -> ProcessSnapshot? {
+        let trimmed = line.trimmingCharacters(in: .whitespaces)
+        guard !trimmed.isEmpty else { return nil }
+
+        let parts = trimmed.split(separator: " ", maxSplits: 3, omittingEmptySubsequences: true)
+        guard parts.count == 4,
+              let pid = Int32(parts[0]),
+              let parentPid = Int32(parts[1]) else {
+            return nil
+        }
+
+        let command = String(parts[3])
+        guard !isProcessInspectionCommand(command) else { return nil }
+
+        return ProcessSnapshot(
+            pid: pid,
+            parentPid: parentPid,
+            elapsed: String(parts[2]),
+            command: command
+        )
+    }
+
+    private static func parseAuthLoginProcess(_ snapshot: ProcessSnapshot) -> ClaudeAuthProcess? {
+        guard snapshot.command.contains("claude auth login") else { return nil }
+
+        return ClaudeAuthProcess(
+            pid: snapshot.pid,
+            parentPid: snapshot.parentPid,
+            elapsed: snapshot.elapsed,
+            command: snapshot.command
+        )
+    }
+
+    private static func parseClaudeCodeSessionProcess(_ snapshot: ProcessSnapshot) -> ClaudeCodeSessionProcess? {
+        let command = snapshot.command
+        if command.contains("/Library/Application Support/Claude/claude-code/") ||
+            command.contains("/Library/Application Support/Claude/Claude Code/") {
+            return ClaudeCodeSessionProcess(
+                pid: snapshot.pid,
+                parentPid: snapshot.parentPid,
+                elapsed: snapshot.elapsed,
+                source: "Claude Desktop",
+                command: command
+            )
+        }
+        return nil
+    }
+
+    private static func isProcessInspectionCommand(_ command: String) -> Bool {
+        command.contains("/bin/ps") ||
+            command.contains("ps -axo") ||
+            command.contains(" rg ") ||
+            command.contains("/rg ") ||
+            command.contains("CCSwitcher-authfix.app") ||
+            command.contains("/CCSwitcher.app/")
+    }
+
     private static func curatedPathCandidates() -> [String] {
         curatedLabeledCandidates().map { $0.0 } + nvmLabeledCandidates().map { $0.0 }
     }
@@ -197,7 +367,7 @@ final class ClaudeService: @unchecked Sendable {
 
     func getAuthStatus() async throws -> AuthStatus {
         log.info("[getAuthStatus] Fetching auth status...")
-        let output = try await runClaude(args: ["auth", "status"])
+        let output = try await runClaude(args: ["auth", "status"], timeout: Self.authStatusTimeout)
         guard let data = output.data(using: .utf8) else {
             log.error("[getAuthStatus] Invalid output (not UTF-8)")
             throw ClaudeServiceError.invalidOutput
@@ -209,7 +379,7 @@ final class ClaudeService: @unchecked Sendable {
 
     func isClaudeAvailable() async -> Bool {
         do {
-            let version = try await runClaude(args: ["--version"])
+            let version = try await runClaude(args: ["--version"], timeout: Self.authStatusTimeout)
             log.info("[isClaudeAvailable] YES, version: \(version.trimmingCharacters(in: .whitespacesAndNewlines))")
             return true
         } catch {
@@ -264,7 +434,7 @@ final class ClaudeService: @unchecked Sendable {
         
         do {
             let usage = try JSONDecoder().decode(UsageAPIResponse.self, from: responseData)
-            log.info("[getUsageLimits] session=\(usage.fiveHour?.utilization ?? -1)%, weekly=\(usage.sevenDay?.utilization ?? -1)%")
+            log.info("[getUsageLimits] session=\(usage.fiveHour?.utilization ?? -1)%, weekly=\(usage.sevenDay?.utilization ?? -1)%, fable=\(usage.sevenDayFable?.utilization ?? -1)%")
             return usage
         } catch {
             log.error("[getUsageLimits] Decode Error: \(error.localizedDescription)")
@@ -399,8 +569,9 @@ final class ClaudeService: @unchecked Sendable {
 
         // 1. Back up current account (token + oauthAccount)
         log.info("[switchAccount] Step 1: Backing up current account...")
-        if let currentToken = keychain.readClaudeToken(),
-           let currentOAuth = keychain.readOAuthAccount() {
+        let currentToken = keychain.readClaudeToken()
+        let currentOAuth = keychain.readOAuthAccount()
+        if let currentToken, let currentOAuth {
             let email = (currentOAuth["emailAddress"]?.value as? String) ?? "?"
             if email == currentAccount.email {
                 let saved = keychain.saveAccountBackup(token: currentToken, oauthAccount: currentOAuth, forAccountId: currentAccount.id.uuidString)
@@ -429,34 +600,53 @@ final class ClaudeService: @unchecked Sendable {
 
         // 4. Verify
         log.info("[switchAccount] Step 4: Verifying with `claude auth status`...")
-        let status = try await getAuthStatus()
+        let status: AuthStatus
+        do {
+            status = try await getAuthStatus()
+        } catch {
+            restoreCredentials(token: currentToken, oauthAccount: currentOAuth, reason: "auth status failed")
+            throw error
+        }
         guard status.loggedIn else {
             log.error("[switchAccount] Step 4: Not logged in after switch!")
+            restoreCredentials(token: currentToken, oauthAccount: currentOAuth, reason: "not logged in")
             throw ClaudeServiceError.switchVerificationFailed
         }
-
+        let outcome: SwitchOutcome
         if let email = status.email {
             guard email == targetAccount.email else {
                 log.error("[switchAccount] Step 4: Logged in as \(email) instead of \(targetAccount.email)")
+                restoreCredentials(token: currentToken, oauthAccount: currentOAuth, reason: "wrong account")
                 throw ClaudeServiceError.switchWrongAccount(expected: targetAccount.email, actual: email)
             }
             log.info("[switchAccount] Step 4: Switch verified — logged in as \(email)")
-            return SwitchOutcome(shadowedBy: nil)
+            outcome = SwitchOutcome(shadowedBy: nil)
+        } else {
+            // No `email` in the status output. The CLI is logged in, but resolves
+            // to a credential source that outranks the stored claude.ai login.
+            let shadowedBy = status.shadowingAuthMethod ?? "unknown"
+            log.warning("[switchAccount] Step 4: CLI reports authMethod=\(shadowedBy) and omits the account identity; verifying against the credential store instead")
+            guard credentialsOnDiskMatch(backup: targetBackup, email: targetAccount.email) else {
+                restoreCredentials(token: currentToken, oauthAccount: currentOAuth, reason: "credential verification failed")
+                throw ClaudeServiceError.switchVerificationFailed
+            }
+            log.info("[switchAccount] Step 4: Switch verified against the credential store (CLI identity hidden by \(shadowedBy))")
+            outcome = SwitchOutcome(shadowedBy: shadowedBy)
         }
 
-        // No `email` in the status output. The CLI is logged in, but resolves to a
-        // credential source that outranks the stored claude.ai login (env token,
-        // apiKeyHelper, OAuth token file, Anthropic profile, third-party provider),
-        // so it omits the identity block entirely. That says nothing about whether
-        // our swap worked, so verify against the credentials we just wrote instead
-        // of reporting the target account as "wrong" (issue #18).
-        let shadowedBy = status.shadowingAuthMethod ?? "unknown"
-        log.warning("[switchAccount] Step 4: CLI reports authMethod=\(shadowedBy) and omits the account identity; verifying against the credential store instead")
-        guard credentialsOnDiskMatch(backup: targetBackup, email: targetAccount.email) else {
-            throw ClaudeServiceError.switchVerificationFailed
+        // `claude auth status` may refresh tokens or profile metadata. Treat the
+        // post-verify state as canonical and persist it to the target backup.
+        if let liveToken = keychain.readClaudeToken(),
+           let liveOAuth = keychain.readOAuthAccount() {
+            let liveEmail = (liveOAuth["emailAddress"]?.value as? String) ?? "?"
+            if liveEmail == targetAccount.email {
+                let saved = keychain.saveAccountBackup(token: liveToken, oauthAccount: liveOAuth, forAccountId: targetAccount.id.uuidString)
+                log.info("[switchAccount] Step 4: Refreshed target backup saved: \(saved)")
+            } else {
+                log.warning("[switchAccount] Step 4: Live oauthAccount changed to \(liveEmail) after verification; target backup not overwritten")
+            }
         }
-        log.info("[switchAccount] Step 4: Switch verified against the credential store (CLI identity hidden by \(shadowedBy))")
-        return SwitchOutcome(shadowedBy: shadowedBy)
+        return outcome
     }
 
     /// Ground-truth check that does not depend on `claude auth status`: both
@@ -482,6 +672,17 @@ final class ClaudeService: @unchecked Sendable {
         return true
     }
 
+    private func restoreCredentials(token: String?, oauthAccount: [String: AnyCodable]?, reason: String) {
+        guard let token, let oauthAccount else {
+            log.warning("[switchAccount] Rollback skipped after \(reason): source credentials unavailable")
+            return
+        }
+        log.warning("[switchAccount] Rolling back source credentials after \(reason)")
+        let tokenRestored = KeychainService.shared.writeClaudeToken(token)
+        let oauthRestored = KeychainService.shared.writeOAuthAccount(oauthAccount)
+        log.warning("[switchAccount] Rollback result: token=\(tokenRestored), oauthAccount=\(oauthRestored)")
+    }
+
     /// Capture the current Claude auth token + oauthAccount and associate with an account
     func captureCurrentCredentials(forAccountId accountId: String) -> Bool {
         log.info("[capture] Capturing credentials for account \(accountId)...")
@@ -504,7 +705,7 @@ final class ClaudeService: @unchecked Sendable {
     /// Run `claude auth login` which opens browser for OAuth.
     func login() async throws {
         log.info("[login] Starting `claude auth login`... (will open browser)")
-        _ = try await runClaude(args: ["auth", "login"])
+        _ = try await runClaude(args: ["auth", "login"], timeout: Self.loginTimeout)
         log.info("[login] `claude auth login` process exited")
 
         // Give keychain a moment to sync after CLI writes
@@ -515,7 +716,7 @@ final class ClaudeService: @unchecked Sendable {
     /// Run `claude auth logout`
     func logout() async throws {
         log.info("[logout] Running `claude auth logout`...")
-        _ = try await runClaude(args: ["auth", "logout"])
+        _ = try await runClaude(args: ["auth", "logout"], timeout: Self.defaultCommandTimeout)
         log.info("[logout] Logout complete")
     }
 
@@ -634,13 +835,14 @@ final class ClaudeService: @unchecked Sendable {
 
     // MARK: - CLI Runner
 
-    private func runClaude(args: [String]) async throws -> String {
+    private func runClaude(args: [String], timeout: TimeInterval = defaultCommandTimeout) async throws -> String {
         let claudePath = self.claudePath
         log.debug("[runClaude] Running: \(claudePath) \(args.joined(separator: " "))")
         return try await withCheckedThrowingContinuation { continuation in
             DispatchQueue.global(qos: .userInitiated).async { [claudePath] in
                 let process = Process()
                 let pipe = Pipe()
+                var didTimeout = false
 
                 process.executableURL = URL(fileURLWithPath: claudePath)
                 process.arguments = args
@@ -672,17 +874,35 @@ final class ClaudeService: @unchecked Sendable {
 
                 do {
                     try process.run()
+
+                    let deadline = Date().addingTimeInterval(timeout)
+                    while process.isRunning && Date() < deadline {
+                        Thread.sleep(forTimeInterval: 0.05)
+                    }
+                    if process.isRunning {
+                        didTimeout = true
+                        log.error("[runClaude] Timed out after \(Int(timeout))s: \(claudePath) \(args.joined(separator: " "))")
+                        process.terminate()
+                    }
                     process.waitUntilExit()
 
                     let data = pipe.fileHandleForReading.readDataToEndOfFile()
                     let output = String(data: data, encoding: .utf8) ?? ""
+                    let sanitizedOutput = Self.sanitizedCLIOutput(output)
+
+                    if didTimeout {
+                        let summary = Self.cliErrorSummary(from: sanitizedOutput)
+                        continuation.resume(throwing: ClaudeServiceError.cliError("timed out after \(Int(timeout))s\(summary)"))
+                        return
+                    }
 
                     if process.terminationStatus == 0 {
                         log.debug("[runClaude] Success (exit 0), output length: \(output.count)")
                         continuation.resume(returning: output)
                     } else {
-                        log.error("[runClaude] Failed (exit \(process.terminationStatus))")
-                        continuation.resume(throwing: ClaudeServiceError.cliError("exit \(process.terminationStatus)"))
+                        let summary = Self.cliErrorSummary(from: sanitizedOutput)
+                        log.error("[runClaude] Failed (exit \(process.terminationStatus))\(summary)")
+                        continuation.resume(throwing: ClaudeServiceError.cliError("exit \(process.terminationStatus)\(summary)"))
                     }
                 } catch {
                     log.error("[runClaude] Process launch failed: \(error.localizedDescription)")
@@ -690,6 +910,36 @@ final class ClaudeService: @unchecked Sendable {
                 }
             }
         }
+    }
+
+    private static func sanitizedCLIOutput(_ output: String) -> String {
+        var text = output
+        let patterns = [
+            #"sk-ant-[A-Za-z0-9_\-]+"#,
+            #"Bearer\s+[A-Za-z0-9_\.\-]+"#,
+            #""accessToken"\s*:\s*"[^"]+""#,
+            #""refreshToken"\s*:\s*"[^"]+""#
+        ]
+
+        for pattern in patterns {
+            text = text.replacingOccurrences(
+                of: pattern,
+                with: "<redacted>",
+                options: .regularExpression
+            )
+        }
+
+        return text.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private static func cliErrorSummary(from sanitizedOutput: String) -> String {
+        guard !sanitizedOutput.isEmpty else { return "" }
+        let lines = sanitizedOutput
+            .split(whereSeparator: \.isNewline)
+            .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        guard let lastLine = lines.last else { return "" }
+        return ": \(String(lastLine.prefix(500)))"
     }
 }
 

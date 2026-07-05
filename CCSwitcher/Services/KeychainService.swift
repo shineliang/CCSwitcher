@@ -4,7 +4,7 @@ import Security
 private let log = FileLog("Keychain")
 
 /// Per-account backup: keychain token + oauthAccount from ~/.claude.json
-struct AccountBackup: Codable {
+struct AccountBackup: Codable, @unchecked Sendable {
     let token: String
     let oauthAccount: [String: AnyCodable]
 }

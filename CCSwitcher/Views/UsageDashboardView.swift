@@ -295,6 +295,14 @@ struct UsageDashboardView: View {
                 kind: .weekly
             )
         }
+        if let fable = usage.sevenDayFable {
+            usageRow(
+                label: "Fable",
+                resetText: fable.resetTimeString,
+                utilization: fable.utilization ?? 0,
+                kind: .weekly
+            )
+        }
     }
 
     @ViewBuilder

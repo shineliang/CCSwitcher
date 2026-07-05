@@ -9,6 +9,9 @@
 "Refresh" = "Actualiser";
 "Settings" = "Réglages";
 "Quit" = "Quitter";
+"External auth manager" = "Gestionnaire d'auth externe";
+"Sync to Orca" = "Synchroniser avec Orca";
+"Dismiss" = "Masquer";
 
 /* Settings - General */
 "General" = "Général";
@@ -55,6 +58,7 @@
 "Token expired. Switch to this account in Claude Code to refresh." = "Jeton expiré. Basculez vers ce compte dans Claude Code pour actualiser.";
 "Session" = "Session";
 "Weekly" = "Hebdomadaire";
+"Fable" = "Fable";
 "Extra usage" = "Utilisation supplémentaire";
 "On" = "Activé";
 "Off" = "Désactivé";
@@ -137,6 +141,9 @@
 "Token expired. Switch to this account to refresh." = "Jeton expiré. Basculez vers ce compte pour actualiser.";
 "API Rate Limited. Try again later." = "Limite de l'API atteinte. Réessayez plus tard.";
 "Could not fetch usage: %@" = "Impossible de récupérer l'utilisation : %@";
+"Current Orca account %@ is not in CCSwitcher. Add Current Account first." = "Le compte Orca actuel %@ n'est pas dans CCSwitcher. Ajoutez d'abord le compte actuel.";
+"Orca changed Claude Code from %@ to %@. CCSwitcher synced to the live account." = "Orca a changé Claude Code de %1$@ à %2$@. CCSwitcher s'est synchronisé avec le compte actif.";
+"Orca changed Claude Code from %@ to %@. Add Current Account first to track it in CCSwitcher." = "Orca a changé Claude Code de %1$@ à %2$@. Ajoutez d'abord le compte actuel pour que CCSwitcher puisse le suivre.";
 
 /* Promo */
 "%@ - %@ (Weekdays) & Weekends" = "%1$@ - %2$@ (Jours ouvrables) & Week-ends";

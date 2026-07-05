@@ -3,6 +3,8 @@
 **Rules**:
 - `project.yml` is the ONLY source of truth. NEVER edit `.pbxproj` or `Info.plist` directly. Run `xcodegen generate` after changes.
 - `CCSwitcher.xcodeproj` is disposable (git-ignored).
+- User-visible fixes are not done until the app is compiled, copied to `/Applications/CCSwitcher.app`, and relaunched. Do this after every completed change unless the user explicitly says not to.
+- On this Mac, full Xcode/xcodebuild may be unavailable (`xcode-select` can point at Command Line Tools only). For source-only app changes, use the manual `swiftc` install flow in `BUILD_GUIDE.md` instead of editing generated project files or hand-writing an `Info.plist`.
 
 **App**: Minimalist macOS menu bar app for managing/switching Claude Code accounts.
 **Features**: Terminal-free login (Process/Pipe interception), zero-interaction token refresh (`security` CLI workaround), API usage tracking.
