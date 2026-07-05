@@ -6,20 +6,32 @@ struct UsageAPIResponse: Codable {
     let fiveHour: UsageWindow?
     let sevenDay: UsageWindow?
     let sevenDayOauthApps: UsageWindow?
+    let sevenDayFableDirect: UsageWindow?
+    let sevenDayOmelette: UsageWindow?
     let sevenDayOpus: UsageWindow?
     let sevenDaySonnet: UsageWindow?
     let sevenDayCowork: UsageWindow?
     let iguanaNecktie: UsageWindow?
+    let limits: [UsageLimit]?
     let extraUsage: ExtraUsage?
+
+    var sevenDayFable: UsageWindow? {
+        if let sevenDayFableDirect { return sevenDayFableDirect }
+        if let sevenDayOmelette { return sevenDayOmelette }
+        return limits?.first(where: { $0.isFableWeeklyLimit })?.asUsageWindow
+    }
 
     enum CodingKeys: String, CodingKey {
         case fiveHour = "five_hour"
         case sevenDay = "seven_day"
         case sevenDayOauthApps = "seven_day_oauth_apps"
+        case sevenDayFableDirect = "seven_day_fable"
+        case sevenDayOmelette = "seven_day_omelette"
         case sevenDayOpus = "seven_day_opus"
         case sevenDaySonnet = "seven_day_sonnet"
         case sevenDayCowork = "seven_day_cowork"
         case iguanaNecktie = "iguana_necktie"
+        case limits
         case extraUsage = "extra_usage"
     }
 }
@@ -87,6 +99,60 @@ struct UsageWindow: Codable {
         guard windowSeconds > 0, let date = resetsAtDate else { return nil }
         let elapsed = 1.0 - (date.timeIntervalSinceNow / windowSeconds)
         return min(max(elapsed, 0), 1) * 100
+    }
+}
+
+struct UsageLimit: Codable {
+    let kind: String?
+    let group: String?
+    let percent: Double?
+    let severity: String?
+    let resetsAt: String?
+    let scope: UsageLimitScope?
+    let isActive: Bool?
+
+    enum CodingKeys: String, CodingKey {
+        case kind
+        case group
+        case percent
+        case severity
+        case resetsAt = "resets_at"
+        case scope
+        case isActive = "is_active"
+    }
+
+    var asUsageWindow: UsageWindow? {
+        guard percent != nil || resetsAt != nil else { return nil }
+        return UsageWindow(utilization: percent, resetsAt: resetsAt)
+    }
+
+    var isFableWeeklyLimit: Bool {
+        let kindValue = kind?.lowercased() ?? ""
+        let groupValue = group?.lowercased() ?? ""
+        let isWeekly = groupValue == "weekly" || kindValue.hasPrefix("weekly")
+
+        let modelIdentity = [
+            scope?.model?.displayName,
+            scope?.model?.id
+        ]
+        .compactMap { $0?.lowercased() }
+        .joined(separator: " ")
+
+        return isWeekly && (modelIdentity.contains("fable") || modelIdentity.contains("omelette"))
+    }
+}
+
+struct UsageLimitScope: Codable {
+    let model: UsageLimitModel?
+}
+
+struct UsageLimitModel: Codable {
+    let id: String?
+    let displayName: String?
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case displayName = "display_name"
     }
 }
 

@@ -9,6 +9,9 @@
 "Refresh" = "更新";
 "Settings" = "設定";
 "Quit" = "終了";
+"External auth manager" = "外部認証マネージャ";
+"Sync to Orca" = "Orca と同期";
+"Dismiss" = "閉じる";
 
 /* Settings - General */
 "General" = "一般";
@@ -54,6 +57,7 @@
 "Token expired. Switch to this account in Claude Code to refresh." = "トークンが期限切れです。Claude Code でこのアカウントに切り替えて更新してください。";
 "Session" = "セッション";
 "Weekly" = "週間";
+"Fable" = "Fable";
 "Extra usage" = "追加使用量";
 "On" = "オン";
 "Off" = "オフ";
@@ -134,6 +138,9 @@
 "Token expired. Switch to this account to refresh." = "トークンが期限切れです。このアカウントに切り替えて更新してください。";
 "API Rate Limited. Try again later." = "API レート制限中。後でもう一度お試しください。";
 "Could not fetch usage: %@" = "使用量を取得できませんでした：%@";
+"Current Orca account %@ is not in CCSwitcher. Add Current Account first." = "現在の Orca アカウント %@ は CCSwitcher にありません。先に現在のアカウントを追加してください。";
+"Orca changed Claude Code from %@ to %@. CCSwitcher synced to the live account." = "Orca が Claude Code を %1$@ から %2$@ に変更しました。CCSwitcher は現在のアカウントに同期しました。";
+"Orca changed Claude Code from %@ to %@. Add Current Account first to track it in CCSwitcher." = "Orca が Claude Code を %1$@ から %2$@ に変更しました。CCSwitcher で追跡するには先に現在のアカウントを追加してください。";
 
 /* Promo */
 "%@ - %@ (Weekdays) & Weekends" = "%1$@ - %2$@（平日）& 週末";

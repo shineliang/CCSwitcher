@@ -11,7 +11,8 @@ private let popoverLog = FileLog("Popover")
 //
 // Contract for future contributors:
 //   * Every chrome element in MainMenuView.body must call `.measureChromeHeight()`.
-//     Currently: headerView, promoBanner (when shown), tabBar, footerView.
+//     Currently: headerView, promoBanner (when shown), externalAuthBanner
+//     (when shown), tabBar, footerView.
 //   * UsageDashboardView's scrollable content must call `.measureUsageContentHeight()`
 //     on its inner VStack (the one inside the ScrollView, not the ScrollView itself).
 //   * The Divider between content and footer is intentionally not measured
@@ -107,6 +108,11 @@ struct MainMenuView: View {
                     .measureChromeHeight()
             }
 
+            if let externalOverride = appState.externalAuthOverride {
+                externalAuthBannerView(externalOverride)
+                    .measureChromeHeight()
+            }
+
             // Tab selector
             tabBar
                 .measureChromeHeight()
@@ -166,6 +172,55 @@ struct MainMenuView: View {
         .onChange(of: popoverHeight) { _, new in
             popoverLog.info("[height] popover=\(new)")
         }
+    }
+
+    // MARK: - External Auth Banner
+
+    private func externalAuthBannerView(_ override: AppState.ExternalAuthOverride) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: "arrow.triangle.2.circlepath.circle.fill")
+                .font(.title3)
+                .foregroundStyle(.orange)
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text("External auth manager")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.primary)
+                Text(override.message)
+                    .font(.caption2)
+                    .foregroundStyle(.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            Spacer(minLength: 4)
+
+            VStack(spacing: 6) {
+                Button {
+                    Task { await appState.syncToExternalAuthOverride() }
+                } label: {
+                    Label("Sync to Orca", systemImage: "arrow.triangle.2.circlepath")
+                        .labelStyle(.iconOnly)
+                }
+                .buttonStyle(.plain)
+                .focusable(false)
+                .help("Sync to Orca")
+                .disabled(appState.isAuthOperationInProgress)
+
+                Button {
+                    appState.dismissExternalAuthOverride()
+                } label: {
+                    Image(systemName: "xmark")
+                }
+                .buttonStyle(.plain)
+                .focusable(false)
+                .help("Dismiss")
+            }
+            .font(.caption)
+            .foregroundStyle(.textSecondary)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 9)
+        .background(Color.orange.opacity(0.10))
     }
 
     // MARK: - Dynamic Popover Height
@@ -355,6 +410,7 @@ struct MainMenuView: View {
             .buttonStyle(.plain)
             .focusable(false)
             .help("Refresh")
+            .disabled(appState.isAuthOperationInProgress)
 
             Button {
                 NSApp.activate(ignoringOtherApps: true)

@@ -1,5 +1,31 @@
 # CCSwitcher Architecture
 
+## Authorization Domains
+
+CCSwitcher manages **Claude Code** authentication only.
+
+Claude Code and Claude Desktop are separate authorization domains:
+
+- **Claude Code** uses the global CLI credential slot:
+  - macOS Keychain service `Claude Code-credentials`
+  - account identity metadata in `~/.claude.json` under `oauthAccount`
+- **Claude Desktop** has its own app login state and is not switched by CCSwitcher.
+
+Do not mix Desktop login state into CCSwitcher's account list. If Desktop launches
+embedded Claude Code/local-agent processes, those processes may still read or write
+Claude Code's global CLI files. CCSwitcher treats that as an external writer for
+diagnostics but does not block switching on active Desktop Code Mode runners,
+because Desktop can usually recover a failed turn with "continue" and the hard
+block makes routine switching feel stuck. CCSwitcher still guards the switch flow
+against active `claude auth login` processes, serializes all in-app auth operations,
+and re-captures the live Claude Code token after a successful CLI verification
+because `claude auth status` may refresh credentials.
+
+This guard does **not** make Claude Desktop accounts part of the Claude Code account
+pool. Switching the shared Claude Code credential while a Desktop Code Mode session
+is running can still produce a failed in-flight Desktop turn, but Desktop-local
+sessions generally keep their history and can resume with a fresh runner.
+
 ## Keychain Token Storage
 
 CCSwitcher manages two sets of keychain entries:
@@ -529,4 +555,3 @@ To circumvent this macOS limitation, CCSwitcher uses the **Lifecycle Keepalive**
 2. **True Invisibility:** The `HiddenWindowView` intercepts its own NSWindow on appearance and sets it to be `[.borderless]`, `alphaValue = 0`, positioned far off-screen (`x: -5000, y: -5000`), and configured to ignore all mouse events.
 3. **Triggering Settings:** `HiddenWindowView` listens for a custom `Notification.Name.ccswitcherOpenSettings` via Combine. When received, it invokes the native SwiftUI `@Environment(\.openSettings)` action.
 4. **Invocation:** In `MainMenuView`, when the user clicks the Settings gear icon, we post this notification. The hidden window (which SwiftUI recognizes as a valid, active scene) catches it and smoothly opens the native Settings window with proper focus.
-

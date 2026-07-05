@@ -135,6 +135,7 @@ struct AccountSwitcherView: View {
                 .buttonStyle(.borderedProminent)
                 .controlSize(.small)
                 .tint(.brand)
+                .disabled(appState.isAuthOperationInProgress)
             }
 
             Button {
@@ -146,9 +147,10 @@ struct AccountSwitcherView: View {
             }
             .buttonStyle(.plain)
             .help("Re-authenticate (fix stale token)")
+            .disabled(appState.isAuthOperationInProgress)
 
             Button {
-                appState.removeAccount(account)
+                Task { await appState.removeAccount(account) }
             } label: {
                 Image(systemName: "trash")
                     .font(.caption)
@@ -156,6 +158,7 @@ struct AccountSwitcherView: View {
             }
             .buttonStyle(.plain)
             .help("Remove account")
+            .disabled(appState.isAuthOperationInProgress)
         }
         .padding(12)
         .background(
@@ -175,18 +178,20 @@ struct AccountSwitcherView: View {
 
     @ViewBuilder
     private var addAccountButtons: some View {
-        if appState.isLoggingIn {
+        if appState.isLoggingIn || appState.isAuthOperationInProgress {
             // Logging in state
             VStack(spacing: 8) {
                 ProgressView()
                     .controlSize(.small)
-                Text("Waiting for browser login...")
+                Text(appState.authOperationMessage ?? String(localized: "Updating Claude Code credentials...", bundle: L10n.bundle))
                     .font(.caption)
                     .foregroundStyle(.textSecondary)
-                Text("Complete the login in your browser, then return here.")
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
-                    .multilineTextAlignment(.center)
+                if appState.isLoggingIn {
+                    Text("Complete the login in your browser, then return here.")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                        .multilineTextAlignment(.center)
+                }
             }
             .frame(maxWidth: .infinity)
             .padding(12)

@@ -212,17 +212,142 @@ Generate with: `xcodegen generate`
 
 ---
 
-## 8. Building from CLI
+## 8. Building, Installing, and Relaunching
+
+For agent work, "done" means the changed app is actually running from
+`/Applications/CCSwitcher.app`. After every user-visible fix, compile, replace
+the installed app, and relaunch it unless the user explicitly asks not to.
+
+### 8.1 Preferred Build When Full Xcode Is Available
+
+Use this path when `xcodebuild -version` works and `xcodegen` is installed.
+Remember: `project.yml` is the source of truth. Do not edit `.pbxproj` or
+`Info.plist` directly.
 
 ```bash
-# Generate Xcode project
 xcodegen generate
-
-# Build
 xcodebuild -project CCSwitcher.xcodeproj -scheme CCSwitcher -configuration Debug build
+APP_PATH="$(find ~/Library/Developer/Xcode/DerivedData -name 'CCSwitcher.app' -type d 2>/dev/null | head -1)"
+test -n "$APP_PATH"
+pkill -x CCSwitcher 2>/dev/null || true
+rm -rf /Applications/CCSwitcher.app
+ditto "$APP_PATH" /Applications/CCSwitcher.app
+xattr -dr com.apple.quarantine /Applications/CCSwitcher.app 2>/dev/null || true
+codesign --verify --deep --strict --verbose=2 /Applications/CCSwitcher.app
+open -a /Applications/CCSwitcher.app
+pgrep -af '/Applications/CCSwitcher.app/Contents/MacOS/CCSwitcher' || true
+```
 
-# Find the built app
-find ~/Library/Developer/Xcode/DerivedData -name "CCSwitcher.app" -type d 2>/dev/null | head -1
+### 8.2 Manual Local Build When Only Command Line Tools Are Available
+
+On this machine, `xcodebuild` can fail with:
+
+```text
+xcode-select: error: tool 'xcodebuild' requires Xcode, but active developer directory '/Library/Developer/CommandLineTools' is a command line tools instance
+```
+
+For source-only fixes, use the manual `swiftc` path below. This builds the main
+menu bar app for local installation. It intentionally excludes the generated
+widget extension and `UpdateChecker.swift`, then supplies a tiny temporary
+`UpdateChecker` stub so local testing does not depend on the full Xcode/Sparkle
+project build.
+
+Do not create or edit a tracked `Info.plist`. The plist is generated from
+`project.yml`; the manual build should reuse `/tmp/ccswitcher-manual-build/Info.plist.saved`
+or the currently installed `/Applications/CCSwitcher.app/Contents/Info.plist`.
+
+```bash
+set -euo pipefail
+
+TMP_ROOT=/tmp/ccswitcher-manual-build
+APP="$TMP_ROOT/CCSwitcher.app"
+INFO_BACKUP="$TMP_ROOT/Info.plist.saved"
+
+mkdir -p "$TMP_ROOT"
+if [ ! -f "$TMP_ROOT/UpdateCheckerStub.swift" ]; then
+  cat > "$TMP_ROOT/UpdateCheckerStub.swift" <<'EOF'
+import Foundation
+
+@MainActor
+final class UpdateChecker: ObservableObject {
+    @Published var isChecking = false
+    func checkForUpdates(manual: Bool = false) {}
+}
+EOF
+fi
+
+if [ ! -f "$INFO_BACKUP" ]; then
+  if [ -f /Applications/CCSwitcher.app/Contents/Info.plist ]; then
+    cp /Applications/CCSwitcher.app/Contents/Info.plist "$INFO_BACKUP"
+  else
+    echo "Missing $INFO_BACKUP and installed Info.plist" >&2
+    exit 1
+  fi
+fi
+
+rm -rf "$APP"
+mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
+
+SOURCES=()
+while IFS= read -r source_file; do
+  SOURCES+=("$source_file")
+done < <(find CCSwitcher Shared -name '*.swift' ! -name 'UpdateChecker.swift' ! -path '*/CCSwitcherWidget.swift' | sort)
+
+swiftc -typecheck -parse-as-library -target arm64-apple-macos14.0 -Xfrontend -strict-concurrency=complete "${SOURCES[@]}" "$TMP_ROOT/UpdateCheckerStub.swift"
+
+swiftc -O -parse-as-library -target arm64-apple-macos14.0 -Xfrontend -strict-concurrency=complete \
+  "${SOURCES[@]}" "$TMP_ROOT/UpdateCheckerStub.swift" \
+  -o "$APP/Contents/MacOS/CCSwitcher"
+
+cp "$INFO_BACKUP" "$APP/Contents/Info.plist"
+
+for lang in de en fr ja zh-Hans; do
+  mkdir -p "$APP/Contents/Resources/$lang.lproj"
+  cp "CCSwitcher/$lang.lproj/Localizable.strings" "$APP/Contents/Resources/$lang.lproj/Localizable.strings"
+done
+
+cp CCSwitcher/Resources/AppIcon.png "$APP/Contents/Resources/AppIcon.png"
+cp CCSwitcher/Resources/MenuBarIcon.png "$APP/Contents/Resources/MenuBarIcon.png"
+cp CCSwitcher/Resources/litellm-pricing.json "$APP/Contents/Resources/litellm-pricing.json"
+cp CCSwitcher/Resources/verified-against.json "$APP/Contents/Resources/verified-against.json"
+
+codesign --force --sign - --entitlements CCSwitcher/Resources/CCSwitcher.entitlements "$APP"
+codesign --verify --deep --strict --verbose=2 "$APP"
+
+rm -rf build/CCSwitcher-authfix.app build/CCSwitcher-authfix.zip
+mkdir -p build
+ditto "$APP" build/CCSwitcher-authfix.app
+ditto -c -k --keepParent build/CCSwitcher-authfix.app build/CCSwitcher-authfix.zip
+shasum -a 256 build/CCSwitcher-authfix.zip
+```
+
+Install and relaunch the manual build:
+
+```bash
+set -euo pipefail
+
+pkill -x CCSwitcher 2>/dev/null || true
+sleep 1
+if pgrep -x CCSwitcher >/dev/null 2>&1; then
+  pkill -9 -x CCSwitcher 2>/dev/null || true
+  sleep 1
+fi
+
+rm -rf /Applications/CCSwitcher.app
+ditto build/CCSwitcher-authfix.app /Applications/CCSwitcher.app
+xattr -dr com.apple.quarantine /Applications/CCSwitcher.app 2>/dev/null || true
+codesign --verify --deep --strict --verbose=2 /Applications/CCSwitcher.app
+open -a /Applications/CCSwitcher.app
+sleep 3
+pgrep -af '/Applications/CCSwitcher.app/Contents/MacOS/CCSwitcher' || true
+```
+
+Recommended post-install checks:
+
+```bash
+plutil -lint CCSwitcher/*.lproj/Localizable.strings
+git diff --check
+tail -n 120 "$HOME/Library/Logs/CCSwitcher-app.log"
 ```
 
 ---

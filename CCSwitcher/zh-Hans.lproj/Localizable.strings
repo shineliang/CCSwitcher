@@ -9,6 +9,9 @@
 "Refresh" = "刷新";
 "Settings" = "设置";
 "Quit" = "退出";
+"External auth manager" = "外部授权管理器";
+"Sync to Orca" = "同步到 Orca";
+"Dismiss" = "忽略";
 
 /* Settings - General */
 "General" = "通用";
@@ -54,6 +57,7 @@
 "Token expired. Switch to this account in Claude Code to refresh." = "令牌已过期。请在 Claude Code 中切换到此账户以刷新。";
 "Session" = "会话";
 "Weekly" = "每周";
+"Fable" = "Fable";
 "Extra usage" = "额外用量";
 "On" = "开启";
 "Off" = "关闭";
@@ -87,6 +91,8 @@
 "Login New Account" = "登录新账户";
 "Add Current Account" = "添加当前账户";
 "Waiting for browser login..." = "等待浏览器登录...";
+"Waiting for Claude Code browser login..." = "等待 Claude Code 浏览器登录...";
+"Updating Claude Code credentials..." = "正在更新 Claude Code 凭据...";
 "Complete the login in your browser, then return here." = "请在浏览器中完成登录，然后返回此处。";
 "This will capture the currently logged-in Claude Code account." = "这将捕获当前已登录的 Claude Code 账户。";
 "Cancel" = "取消";
@@ -134,6 +140,15 @@
 "Token expired. Switch to this account to refresh." = "令牌已过期。切换到此账户以刷新。";
 "API Rate Limited. Try again later." = "API 请求频率受限。请稍后重试。";
 "Could not fetch usage: %@" = "无法获取用量：%@";
+"Another Claude Code auth operation is already running." = "另一个 Claude Code 授权操作正在进行。";
+"Claude Code browser login is already in progress." = "Claude Code 浏览器登录正在进行。";
+"Claude Code auth login is still running. Finish or cancel it before switching accounts." = "Claude Code auth login 仍在运行。请先完成或取消它，再切换账号。";
+"Capturing Claude Code account..." = "正在捕获 Claude Code 账号...";
+"Switching Claude Code account..." = "正在切换 Claude Code 账号...";
+"Claude Code active account changed. Refresh before switching again." = "Claude Code 当前账号已被外部更改。请刷新后再切换。";
+"Current Orca account %@ is not in CCSwitcher. Add Current Account first." = "当前 Orca 账号 %@ 不在 CCSwitcher 中。请先添加当前账号。";
+"Orca changed Claude Code from %@ to %@. CCSwitcher synced to the live account." = "Orca 已将 Claude Code 从 %1$@ 切回 %2$@。CCSwitcher 已同步到当前账号。";
+"Orca changed Claude Code from %@ to %@. Add Current Account first to track it in CCSwitcher." = "Orca 已将 Claude Code 从 %1$@ 切回 %2$@。请先添加当前账号，CCSwitcher 才能跟踪它。";
 
 /* Promo */
 "%@ - %@ (Weekdays) & Weekends" = "%1$@ - %2$@（工作日）及周末";
