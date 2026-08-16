@@ -62,7 +62,7 @@ struct LiteLLMModelPricing: Sendable {
 /// back to which snapshot was used.
 enum PricingSource: Sendable {
     case bundle(commit: String)         // litellm-pricing.json in the app bundle
-    case fresh(fetchedAt: Date)         // ~/Library/Application Support/CCSwitcher/litellm-pricing-fresh.json
+    case fresh(fetchedAt: Date)         // ~/.ccswitcher/cache/litellm-pricing-fresh.json
 
     var marker: String {
         switch self {
@@ -141,9 +141,10 @@ actor PricingService {
     private var lastNetworkCheck: Date?
 
     private static let freshURL: URL = {
-        let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
-            ?? URL(fileURLWithPath: NSHomeDirectory() + "/Library/Application Support")
-        let dir = appSupport.appendingPathComponent("CCSwitcher", isDirectory: true)
+        // See SessionParseCacheV2: local derived state lives under the app's
+        // existing ~/.ccswitcher directory to avoid repeat App Data prompts.
+        let dir = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".ccswitcher/cache", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir.appendingPathComponent("litellm-pricing-fresh.json")
     }()

@@ -517,9 +517,16 @@ diagnoseTokenHealth()
 | Concern | Security Framework | `security` CLI |
 |---------|-------------------|----------------|
 | Claude's keychain entry | Prompt every access (we don't own the ACL) | "Always Allow" persists |
-| Our own keychain entries | Prompt on every Debug rebuild (code signature changes) | "Always Allow" persists |
+| Our own keychain entries | Prompt when an ad-hoc build's designated requirement changes | "Always Allow" persists |
 | Production (signed) builds | Would work without prompts | Also works |
 | Recommendation | Only for signed production builds | **Use for all builds** |
+
+Manual local builds must use the dedicated `CCSwitcher Local Development`
+identity in `~/Library/Keychains/ccswitcher-local-signing.keychain-db`. Plain
+`codesign --sign -` synthesizes a CDHash-only requirement, so TCC treats every
+rebuilt binary as a new app and asks for file access again. A bare custom
+identifier requirement is also insufficient; TCC needs the stable certificate
+leaf in the designated requirement.
 
 ---
 

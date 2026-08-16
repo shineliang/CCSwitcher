@@ -1,7 +1,26 @@
 import Foundation
 import Security
+import Darwin
+import LocalAuthentication
 
 private let log = FileLog("Keychain")
+
+private final class LockedKeychainOutputBuffer: @unchecked Sendable {
+    private let lock = NSLock()
+    private var data = Data()
+
+    func append(_ chunk: Data) {
+        lock.lock()
+        data.append(chunk)
+        lock.unlock()
+    }
+
+    func snapshot() -> Data {
+        lock.lock()
+        defer { lock.unlock() }
+        return data
+    }
+}
 
 /// Per-account backup: keychain token + oauthAccount from ~/.claude.json
 struct AccountBackup: Codable, @unchecked Sendable {
@@ -52,6 +71,7 @@ struct AnyCodable: Codable, Equatable {
 /// - Our backups: per-account {token, oauthAccount} in ~/.ccswitcher/backups.json.
 final class KeychainService: Sendable {
     static let shared = KeychainService()
+    private static let securityCommandTimeout: TimeInterval = 10
 
     private let claudeService = "Claude Code-credentials"
     private let claudeAccount: String
@@ -196,10 +216,10 @@ final class KeychainService: Sendable {
         case storeUnavailable
     }
 
-    func lookupAccountBackup(forAccountId accountId: String) -> BackupLookup {
+    func lookupAccountBackup(forAccountId accountId: String, allowInteraction: Bool = true) -> BackupLookup {
         storeLock.lock()
         defer { storeLock.unlock() }
-        switch loadBackupStore() {
+        switch loadBackupStore(allowInteraction: allowInteraction) {
         case .loaded(let store):
             guard let backup = store[accountId] else {
                 log.error("[getBackup] No backup for accountId=\(accountId)")
@@ -222,8 +242,11 @@ final class KeychainService: Sendable {
     /// Convenience for call sites where "missing" and "unavailable" demand the
     /// same behavior (skip / treat as not switchable). Paths that tell the user
     /// what to DO about it must use `lookupAccountBackup` instead.
-    func getAccountBackup(forAccountId accountId: String) -> AccountBackup? {
-        if case .found(let backup) = lookupAccountBackup(forAccountId: accountId) {
+    func getAccountBackup(forAccountId accountId: String, allowInteraction: Bool = true) -> AccountBackup? {
+        if case .found(let backup) = lookupAccountBackup(
+            forAccountId: accountId,
+            allowInteraction: allowInteraction
+        ) {
             return backup
         }
         return nil
@@ -269,14 +292,24 @@ final class KeychainService: Sendable {
     }
 
     /// Must be called with `storeLock` held.
-    private func loadBackupStore() -> BackupStoreLoad {
-        let query: [String: Any] = [
+    private func loadBackupStore(allowInteraction: Bool = true) -> BackupStoreLoad {
+        var query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: appBackupService,
             kSecAttrAccount as String: appBackupAccount,
             kSecReturnData as String: true,
             kSecMatchLimit as String: kSecMatchLimitOne
         ]
+
+        // Periodic refreshes must never display a macOS keychain authorization
+        // dialog. Ad-hoc local builds receive a new cdhash after every install,
+        // so an ACL that trusted the previous build may require interaction.
+        // User-initiated account operations keep the default interactive path.
+        if !allowInteraction {
+            let context = LAContext()
+            context.interactionNotAllowed = true
+            query[kSecUseAuthenticationContext as String] = context
+        }
 
         var item: CFTypeRef?
         let status = SecItemCopyMatching(query as CFDictionary, &item)
@@ -296,6 +329,12 @@ final class KeychainService: Sendable {
             return .loaded(dict)
 
         case errSecItemNotFound:
+            // Background reads are observational only. Migration writes to the
+            // keychain, so leave it for a user-initiated interactive operation.
+            guard allowInteraction else {
+                log.debug("[loadBackupStore] No keychain backup available to background read")
+                return .empty
+            }
             // Migration from local file (pre-keychain versions)
             if FileManager.default.fileExists(atPath: backupsFilePath) {
                 guard let data = FileManager.default.contents(atPath: backupsFilePath),
@@ -380,21 +419,39 @@ final class KeychainService: Sendable {
     private func runSecurity(args: [String]) -> String? {
         let process = Process()
         let pipe = Pipe()
+        let outputBuffer = LockedKeychainOutputBuffer()
+        let outputHandle = pipe.fileHandleForReading
 
         process.executableURL = URL(fileURLWithPath: "/usr/bin/security")
         process.arguments = args
         process.standardOutput = pipe
         process.standardError = FileHandle.nullDevice
+        outputHandle.readabilityHandler = { handle in
+            let data = handle.availableData
+            guard !data.isEmpty else { return }
+            outputBuffer.append(data)
+        }
+        defer {
+            outputHandle.readabilityHandler = nil
+        }
 
         do {
             try process.run()
-            process.waitUntilExit()
+            guard waitForSecurityProcess(process, operation: "runSecurity") else {
+                return nil
+            }
+
+            // The readability handler drains stdout while the process is running,
+            // preventing large Claude credential payloads from filling the pipe.
+            // Pick up any final bytes delivered between process exit and teardown.
+            outputHandle.readabilityHandler = nil
+            outputBuffer.append(outputHandle.readDataToEndOfFile())
+
             guard process.terminationStatus == 0 else {
                 log.debug("[runSecurity] Exit \(process.terminationStatus) for: security \(args.prefix(3).joined(separator: " "))...")
                 return nil
             }
-            let data = pipe.fileHandleForReading.readDataToEndOfFile()
-            let output = String(data: data, encoding: .utf8)?
+            let output = String(data: outputBuffer.snapshot(), encoding: .utf8)?
                 .trimmingCharacters(in: .whitespacesAndNewlines)
             return output?.isEmpty == true ? nil : output
         } catch {
@@ -411,7 +468,9 @@ final class KeychainService: Sendable {
         process.standardError = FileHandle.nullDevice
         do {
             try process.run()
-            process.waitUntilExit()
+            guard waitForSecurityProcess(process, operation: "runSecurityStatus") else {
+                return false
+            }
             let ok = process.terminationStatus == 0
             if !ok {
                 log.debug("[runSecurityStatus] Exit \(process.terminationStatus) for: security \(args.prefix(3).joined(separator: " "))...")
@@ -421,5 +480,31 @@ final class KeychainService: Sendable {
             log.error("[runSecurityStatus] Launch failed: \(error.localizedDescription)")
             return false
         }
+    }
+
+    private func waitForSecurityProcess(_ process: Process, operation: String) -> Bool {
+        let deadline = Date().addingTimeInterval(Self.securityCommandTimeout)
+        while process.isRunning && Date() < deadline {
+            Thread.sleep(forTimeInterval: 0.02)
+        }
+
+        guard process.isRunning else {
+            process.waitUntilExit()
+            return true
+        }
+
+        log.error("[\(operation)] security timed out after \(Int(Self.securityCommandTimeout))s; terminating pid=\(process.processIdentifier)")
+        process.terminate()
+
+        let terminationDeadline = Date().addingTimeInterval(1)
+        while process.isRunning && Date() < terminationDeadline {
+            Thread.sleep(forTimeInterval: 0.02)
+        }
+        if process.isRunning {
+            log.error("[\(operation)] security ignored termination; force-killing pid=\(process.processIdentifier)")
+            _ = Darwin.kill(process.processIdentifier, SIGKILL)
+        }
+        process.waitUntilExit()
+        return false
     }
 }

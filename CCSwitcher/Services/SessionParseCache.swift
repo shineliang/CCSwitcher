@@ -75,10 +75,8 @@ actor SessionParseCache {
     private init() {
         self.claudeProjectsDir = NSHomeDirectory() + "/.claude/projects"
 
-        let appSupport = FileManager.default.urls(
-            for: .applicationSupportDirectory, in: .userDomainMask
-        ).first ?? URL(fileURLWithPath: NSHomeDirectory() + "/Library/Application Support")
-        let dir = appSupport.appendingPathComponent("CCSwitcher", isDirectory: true)
+        let dir = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".ccswitcher/cache", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         self.cacheURL = dir.appendingPathComponent("session-parse-cache.json")
     }

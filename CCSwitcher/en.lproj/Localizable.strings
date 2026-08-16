@@ -95,6 +95,10 @@
 "Waiting for Claude Code browser login..." = "Waiting for Claude Code browser login...";
 "Updating Claude Code credentials..." = "Updating Claude Code credentials...";
 "Complete the login in your browser, then return here." = "Complete the login in your browser, then return here.";
+"Open Again" = "Open Again";
+"Copy Link" = "Copy Link";
+"Open the login page again" = "Open the login page again";
+"Copy the login link" = "Copy the login link";
 "This will capture the currently logged-in Claude Code account." = "This will capture the currently logged-in Claude Code account.";
 "Cancel" = "Cancel";
 "Add Account" = "Add Account";
@@ -146,6 +150,9 @@
 "Another Claude Code auth operation is already running." = "Another Claude Code auth operation is already running.";
 "Claude Code browser login is already in progress." = "Claude Code browser login is already in progress.";
 "Claude Code auth login is still running. Finish or cancel it before switching accounts." = "Claude Code auth login is still running. Finish or cancel it before switching accounts.";
+"Canceling Claude Code browser login..." = "Canceling Claude Code browser login...";
+"Claude Code browser login canceled." = "Claude Code browser login canceled.";
+"Login link copied. Paste it into the right browser session." = "Login link copied. Paste it into the right browser session.";
 "Capturing Claude Code account..." = "Capturing Claude Code account...";
 "Switching Claude Code account..." = "Switching Claude Code account...";
 "Claude Code active account changed. Refresh before switching again." = "Claude Code active account changed. Refresh before switching again.";

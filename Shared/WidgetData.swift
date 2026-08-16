@@ -1,4 +1,5 @@
 import Foundation
+import Security
 
 /// Data shared between the main app and widget via direct file in the widget's sandbox container.
 ///
@@ -34,8 +35,35 @@ struct WidgetData: Codable {
     private static let appGroupID = "584KQTRF3B.me.xueshi.ccswitcher"
     private static let fileName = "widget-data.json"
 
+    /// Manual local builds do not contain the widget extension and have no
+    /// Apple Team ID. Asking for the production App Group from such a build is
+    /// treated by macOS as access to another app's data and prompts on every
+    /// launch. A real Xcode/Developer-ID build has a stable team identifier and
+    /// keeps the widget path enabled.
+    private static var hasTeamIdentifier: Bool {
+        var code: SecCode?
+        guard SecCodeCopySelf([], &code) == errSecSuccess, let code else {
+            return false
+        }
+
+        var staticCode: SecStaticCode?
+        guard SecCodeCopyStaticCode(code, [], &staticCode) == errSecSuccess,
+              let staticCode else {
+            return false
+        }
+
+        var signingInfo: CFDictionary?
+        guard SecCodeCopySigningInformation(staticCode, [], &signingInfo) == errSecSuccess,
+              let info = signingInfo as? [CFString: Any],
+              let teamIdentifier = info[kSecCodeInfoTeamIdentifier] as? String else {
+            return false
+        }
+        return !teamIdentifier.isEmpty
+    }
+
     private static var sharedContainerURL: URL? {
-        FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: appGroupID)
+        guard hasTeamIdentifier else { return nil }
+        return FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: appGroupID)
     }
 
     /// Load from the shared App Group container.

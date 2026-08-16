@@ -1,6 +1,7 @@
 import SwiftUI
 import Combine
 import WidgetKit
+import AppKit
 
 private let log = FileLog("AppState")
 
@@ -25,6 +26,8 @@ final class AppState: ObservableObject {
     @Published var isLoggingIn = false
     @Published private(set) var isAuthOperationInProgress = false
     @Published private(set) var authOperationMessage: String?
+    @Published private(set) var authLoginURL: URL?
+    @Published private(set) var isCancelingAuthOperation = false
     @Published var errorMessage: String?
     @Published var claudeAvailable = false
     @Published var lastUsageRefresh: Date?
@@ -289,6 +292,8 @@ final class AppState: ObservableObject {
 
         isAuthOperationInProgress = true
         authOperationMessage = message
+        authLoginURL = nil
+        isCancelingAuthOperation = false
         if allowBrowserLogin {
             isLoggingIn = true
         }
@@ -327,7 +332,45 @@ final class AppState: ObservableObject {
     private func endAuthOperation() {
         isAuthOperationInProgress = false
         authOperationMessage = nil
+        authLoginURL = nil
+        isCancelingAuthOperation = false
         isLoggingIn = false
+    }
+
+    private func authLoginURLHandler() -> @Sendable (URL) -> Void {
+        { [weak self] url in
+            Task { @MainActor in
+                guard let self, self.isLoggingIn else { return }
+                self.authLoginURL = url
+                log.info("[auth] Captured browser login URL")
+            }
+        }
+    }
+
+    func reopenBrowserLogin() {
+        guard let authLoginURL else { return }
+        NSWorkspace.shared.open(authLoginURL)
+        authOperationMessage = String(localized: "Waiting for Claude Code browser login...", bundle: L10n.bundle)
+        log.info("[auth] Reopened browser login URL")
+    }
+
+    func copyBrowserLoginURL() {
+        guard let authLoginURL else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(authLoginURL.absoluteString, forType: .string)
+        authOperationMessage = String(localized: "Login link copied. Paste it into the right browser session.", bundle: L10n.bundle)
+        log.info("[auth] Copied browser login URL")
+    }
+
+    func cancelBrowserLogin() {
+        guard isLoggingIn else { return }
+        isCancelingAuthOperation = true
+        authOperationMessage = String(localized: "Canceling Claude Code browser login...", bundle: L10n.bundle)
+
+        if !claudeService.cancelActiveLogin() {
+            errorMessage = String(localized: "Claude Code browser login canceled.", bundle: L10n.bundle)
+            endAuthOperation()
+        }
     }
 
     // MARK: - Account Management
@@ -437,7 +480,7 @@ final class AppState: ObservableObject {
 
             // 2. Run `claude auth login` — this overwrites both keychain and ~/.claude.json
             log.info("[loginNewAccount] Step 2: Running `claude auth login`...")
-            try await claudeService.login()
+            try await claudeService.login(onAuthorizationURL: authLoginURLHandler())
             log.info("[loginNewAccount] Step 2: Login process completed")
 
             // 3. Read the new identity from ~/.claude.json
@@ -532,6 +575,10 @@ final class AppState: ObservableObject {
             endAuthOperation()
             if shouldRefresh { await refresh() }
             log.info("[loginNewAccount] ===== Login completed =====")
+        } catch ClaudeServiceError.loginCanceled {
+            errorMessage = String(localized: "Claude Code browser login canceled.", bundle: L10n.bundle)
+            endAuthOperation()
+            log.info("[loginNewAccount] Canceled")
         } catch {
             errorMessage = error.localizedDescription
             endAuthOperation()
@@ -841,7 +888,7 @@ final class AppState: ObservableObject {
 
             // 2. Run login
             log.info("[reauth] Running `claude auth login`...")
-            try await claudeService.login()
+            try await claudeService.login(prefilledEmail: account.email, onAuthorizationURL: authLoginURLHandler())
 
             // 3. Verify the login result matches the target account
             let status = try await claudeService.getAuthStatus()
@@ -853,12 +900,12 @@ final class AppState: ObservableObject {
             guard let email = status.email else {
                 errorMessage = shadowedIdentityMessage(status)
                 log.error("[reauth] CLI reports authMethod=\(status.authMethod ?? "nil") without an account identity")
-                isLoggingIn = false
+                endAuthOperation()
                 return
             }
 
             guard email == account.email else {
-                errorMessage = String(localized: "Logged in as \(email), but expected \(account.email). Credentials not updated.", bundle: L10n.bundle)
+                let mismatchMessage = String(localized: "Logged in as \(email), but expected \(account.email). Credentials not updated.", bundle: L10n.bundle)
                 log.error("[reauth] Email mismatch: got \(email), expected \(account.email)")
                 if let existing = accounts.firstIndex(where: { $0.email == email }) {
                     let existingId = accounts[existing].id.uuidString
@@ -877,6 +924,8 @@ final class AppState: ObservableObject {
                 }
                 endAuthOperation()
                 if shouldRefresh { await refresh() }
+                // `refresh()` clears errorMessage, so surface the mismatch last.
+                errorMessage = mismatchMessage
                 return
             }
 
@@ -916,6 +965,10 @@ final class AppState: ObservableObject {
                 errorMessage = String(localized: "Could not capture credentials", bundle: L10n.bundle)
                 log.error("[reauth] ===== Re-authentication finished, but the backup capture FAILED =====")
             }
+        } catch ClaudeServiceError.loginCanceled {
+            errorMessage = String(localized: "Claude Code browser login canceled.", bundle: L10n.bundle)
+            endAuthOperation()
+            log.info("[reauth] Canceled")
         } catch {
             errorMessage = error.localizedDescription
             endAuthOperation()
@@ -1081,7 +1134,10 @@ final class AppState: ObservableObject {
             } else {
                 let accountId = account.id.uuidString
                 tokenJSON = await runBlocking {
-                    KeychainService.shared.getAccountBackup(forAccountId: accountId)?.token
+                    KeychainService.shared.getAccountBackup(
+                        forAccountId: accountId,
+                        allowInteraction: false
+                    )?.token
                 }
             }
             guard let tokenJSON, let accessToken = ClaudeService.extractAccessToken(from: tokenJSON) else {
@@ -1237,7 +1293,10 @@ final class AppState: ObservableObject {
         // Check each account has a backup
         let backupHealth = await runBlocking { () -> [BackupHealth] in
             accountSnapshot.map { account in
-                let backup = KeychainService.shared.getAccountBackup(forAccountId: account.id)
+                let backup = KeychainService.shared.getAccountBackup(
+                    forAccountId: account.id,
+                    allowInteraction: false
+                )
                 let backupEmail = backup.flatMap { ($0.oauthAccount["emailAddress"]?.value as? String) ?? "?" }
                 return BackupHealth(email: account.email, backupEmail: backupEmail)
             }

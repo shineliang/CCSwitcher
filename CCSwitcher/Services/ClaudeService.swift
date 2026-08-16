@@ -19,6 +19,19 @@ private final class LockedDataBuffer: @unchecked Sendable {
     }
 }
 
+private final class LockedStringDeduper: @unchecked Sendable {
+    private let lock = NSLock()
+    private var lastValue: String?
+
+    func shouldEmit(_ value: String) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        guard lastValue != value else { return false }
+        lastValue = value
+        return true
+    }
+}
+
 /// UserDefaults key holding the user's preferred Claude CLI path (empty = auto).
 let kClaudeBinaryPathPreferenceKey = "claudeBinaryPathPreference"
 
@@ -69,6 +82,8 @@ final class ClaudeService: @unchecked Sendable {
     private var _claudePath: String
     /// Monotonic counter to detect out-of-order setPath completions.
     private var _setPathGeneration: UInt64 = 0
+    private var _activeLoginProcess: Process?
+    private var _loginCancellationRequested = false
 
     /// Currently active path. Thread-safe.
     var claudePath: String {
@@ -703,14 +718,44 @@ final class ClaudeService: @unchecked Sendable {
     }
 
     /// Run `claude auth login` which opens browser for OAuth.
-    func login() async throws {
+    func login(
+        prefilledEmail: String? = nil,
+        onAuthorizationURL: (@Sendable (URL) -> Void)? = nil
+    ) async throws {
         log.info("[login] Starting `claude auth login`... (will open browser)")
-        _ = try await runClaude(args: ["auth", "login"], timeout: Self.loginTimeout)
+        _ = try await runClaudeLogin(
+            timeout: Self.loginTimeout,
+            prefilledEmail: prefilledEmail,
+            onAuthorizationURL: onAuthorizationURL
+        )
         log.info("[login] `claude auth login` process exited")
 
         // Give keychain a moment to sync after CLI writes
         try await Task.sleep(for: .seconds(1))
         log.info("[login] Post-login delay complete, ready for token capture")
+    }
+
+    func cancelActiveLogin() -> Bool {
+        lock.lock()
+        let process = _activeLoginProcess
+        if process != nil {
+            _loginCancellationRequested = true
+        }
+        let isRunning = process?.isRunning == true
+        lock.unlock()
+
+        guard let process else {
+            log.info("[login] Cancel requested but no active login process is running")
+            return false
+        }
+
+        if isRunning {
+            log.info("[login] Terminating active `claude auth login` process pid=\(process.processIdentifier)")
+            process.terminate()
+        } else {
+            log.info("[login] Cancel requested before `claude auth login` fully started")
+        }
+        return true
     }
 
     /// Run `claude auth logout`
@@ -835,6 +880,139 @@ final class ClaudeService: @unchecked Sendable {
 
     // MARK: - CLI Runner
 
+    private func runClaudeLogin(
+        timeout: TimeInterval,
+        prefilledEmail: String?,
+        onAuthorizationURL: (@Sendable (URL) -> Void)?
+    ) async throws -> String {
+        let claudePath = self.claudePath
+        var args = ["auth", "login"]
+        if let prefilledEmail, !prefilledEmail.isEmpty {
+            args.append(contentsOf: ["--email", prefilledEmail])
+        }
+        log.debug("[runClaudeLogin] Running: \(claudePath) \(args.joined(separator: " "))")
+        return try await withCheckedThrowingContinuation { continuation in
+            DispatchQueue.global(qos: .userInitiated).async { [claudePath, args] in
+                let process = Process()
+                let pipe = Pipe()
+                let outputBuffer = LockedDataBuffer()
+                let emittedLoginURLs = LockedStringDeduper()
+                var didTimeout = false
+
+                process.executableURL = URL(fileURLWithPath: claudePath)
+                process.arguments = args
+                process.standardOutput = pipe
+                process.standardError = pipe
+
+                var env = ProcessInfo.processInfo.environment
+                let homeDir = NSHomeDirectory()
+                var extraPaths = [
+                    "/opt/homebrew/bin",
+                    "/usr/local/bin",
+                    "\(homeDir)/.local/bin",
+                    "\(homeDir)/.npm-global/bin"
+                ]
+                if claudePath.contains("/") {
+                    let resolved = URL(fileURLWithPath: claudePath).resolvingSymlinksInPath().path
+                    let resolvedBinDir = URL(fileURLWithPath: resolved).deletingLastPathComponent().path
+                    extraPaths.insert(resolvedBinDir, at: 0)
+                }
+                let existingPath = env["PATH"] ?? "/usr/bin:/bin"
+                env["PATH"] = (extraPaths + [existingPath]).joined(separator: ":")
+                env["HOME"] = homeDir
+                process.environment = env
+
+                pipe.fileHandleForReading.readabilityHandler = { handle in
+                    let data = handle.availableData
+                    guard !data.isEmpty else { return }
+                    outputBuffer.append(data)
+
+                    guard let onAuthorizationURL,
+                          let output = String(data: outputBuffer.snapshot(), encoding: .utf8),
+                          let url = Self.extractAuthorizationURL(from: output) else {
+                        return
+                    }
+
+                    let urlString = url.absoluteString
+                    if emittedLoginURLs.shouldEmit(urlString) {
+                        log.info("[runClaudeLogin] Captured Claude authorization URL")
+                        onAuthorizationURL(url)
+                    }
+                }
+
+                self.lock.lock()
+                self._activeLoginProcess = process
+                self._loginCancellationRequested = false
+                self.lock.unlock()
+
+                do {
+                    try process.run()
+
+                    self.lock.lock()
+                    let shouldCancelImmediately = self._loginCancellationRequested
+                    self.lock.unlock()
+                    if shouldCancelImmediately {
+                        process.terminate()
+                    }
+
+                    let deadline = Date().addingTimeInterval(timeout)
+                    while process.isRunning && Date() < deadline {
+                        Thread.sleep(forTimeInterval: 0.05)
+                    }
+                    if process.isRunning {
+                        didTimeout = true
+                        log.error("[runClaudeLogin] Timed out after \(Int(timeout))s: \(claudePath) \(args.joined(separator: " "))")
+                        process.terminate()
+                    }
+                    process.waitUntilExit()
+                    pipe.fileHandleForReading.readabilityHandler = nil
+
+                    self.lock.lock()
+                    let wasCanceled = self._loginCancellationRequested
+                    if self._activeLoginProcess === process {
+                        self._activeLoginProcess = nil
+                        self._loginCancellationRequested = false
+                    }
+                    self.lock.unlock()
+
+                    let output = String(data: outputBuffer.snapshot(), encoding: .utf8) ?? ""
+                    let sanitizedOutput = Self.sanitizedCLIOutput(output)
+
+                    if wasCanceled {
+                        log.info("[runClaudeLogin] Login canceled by user")
+                        continuation.resume(throwing: ClaudeServiceError.loginCanceled)
+                        return
+                    }
+
+                    if didTimeout {
+                        let summary = Self.cliErrorSummary(from: sanitizedOutput)
+                        continuation.resume(throwing: ClaudeServiceError.cliError("timed out after \(Int(timeout))s\(summary)"))
+                        return
+                    }
+
+                    if process.terminationStatus == 0 {
+                        log.debug("[runClaudeLogin] Success (exit 0), output length: \(output.count)")
+                        continuation.resume(returning: output)
+                    } else {
+                        let summary = Self.cliErrorSummary(from: sanitizedOutput)
+                        log.error("[runClaudeLogin] Failed (exit \(process.terminationStatus))\(summary)")
+                        continuation.resume(throwing: ClaudeServiceError.cliError("exit \(process.terminationStatus)\(summary)"))
+                    }
+                } catch {
+                    pipe.fileHandleForReading.readabilityHandler = nil
+                    self.lock.lock()
+                    if self._activeLoginProcess === process {
+                        self._activeLoginProcess = nil
+                        self._loginCancellationRequested = false
+                    }
+                    self.lock.unlock()
+                    log.error("[runClaudeLogin] Process launch failed: \(error.localizedDescription)")
+                    continuation.resume(throwing: ClaudeServiceError.processLaunchFailed(error))
+                }
+            }
+        }
+    }
+
     private func runClaude(args: [String], timeout: TimeInterval = defaultCommandTimeout) async throws -> String {
         let claudePath = self.claudePath
         log.debug("[runClaude] Running: \(claudePath) \(args.joined(separator: " "))")
@@ -915,6 +1093,7 @@ final class ClaudeService: @unchecked Sendable {
     private static func sanitizedCLIOutput(_ output: String) -> String {
         var text = output
         let patterns = [
+            #"https://claude\.ai/oauth/authorize[^\s<>"']+"#,
             #"sk-ant-[A-Za-z0-9_\-]+"#,
             #"Bearer\s+[A-Za-z0-9_\.\-]+"#,
             #""accessToken"\s*:\s*"[^"]+""#,
@@ -930,6 +1109,35 @@ final class ClaudeService: @unchecked Sendable {
         }
 
         return text.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private static func extractAuthorizationURL(from output: String) -> URL? {
+        let text = strippingTerminalControlSequences(output)
+        let pattern = #"https://claude\.ai/oauth/authorize[^\s<>"']+"#
+        guard let range = text.range(of: pattern, options: .regularExpression) else {
+            return nil
+        }
+        let trailingPunctuation = CharacterSet(charactersIn: ".,);]}")
+        let rawURL = String(text[range]).trimmingCharacters(in: trailingPunctuation)
+        return URL(string: rawURL)
+    }
+
+    private static func strippingTerminalControlSequences(_ output: String) -> String {
+        var text = output
+        let esc = "\u{001B}"
+        let bell = "\u{0007}"
+        let patterns = [
+            "\(esc)\\][^\(bell)]*(?:\(bell)|\(esc)\\\\)",
+            "\(esc)\\[[0-?]*[ -/]*[@-~]"
+        ]
+        for pattern in patterns {
+            text = text.replacingOccurrences(
+                of: pattern,
+                with: "",
+                options: .regularExpression
+            )
+        }
+        return text
     }
 
     private static func cliErrorSummary(from sanitizedOutput: String) -> String {
@@ -949,6 +1157,7 @@ enum ClaudeServiceError: LocalizedError {
     case invalidOutput
     case cliError(String)
     case processLaunchFailed(Error)
+    case loginCanceled
     case noTokenForAccount(String)
     case keychainWriteFailed
     case oauthAccountWriteFailed
@@ -963,6 +1172,8 @@ enum ClaudeServiceError: LocalizedError {
             return "Claude CLI error: \(msg)"
         case .processLaunchFailed(let error):
             return "Failed to launch Claude: \(error.localizedDescription)"
+        case .loginCanceled:
+            return "Claude Code browser login canceled."
         case .noTokenForAccount:
             return "No stored backup for target account"
         case .keychainWriteFailed:

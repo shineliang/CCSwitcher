@@ -311,8 +311,19 @@ cp CCSwitcher/Resources/MenuBarIcon.png "$APP/Contents/Resources/MenuBarIcon.png
 cp CCSwitcher/Resources/litellm-pricing.json "$APP/Contents/Resources/litellm-pricing.json"
 cp CCSwitcher/Resources/verified-against.json "$APP/Contents/Resources/verified-against.json"
 
-codesign --force --sign - --entitlements CCSwitcher/Resources/CCSwitcher.entitlements "$APP"
+# This Mac has a dedicated local code-signing identity in an isolated keychain.
+# A plain ad-hoc `--sign -` build gets a CDHash-only identity, so every rebuild
+# looks like a different app to TCC and Keychain and repeats permission prompts.
+LOCAL_SIGNING_KEYCHAIN="$HOME/Library/Keychains/ccswitcher-local-signing.keychain-db"
+security unlock-keychain -p '' "$LOCAL_SIGNING_KEYCHAIN"
+security find-identity -v -p codesigning "$LOCAL_SIGNING_KEYCHAIN" \
+  | grep -F 'CCSwitcher Local Development'
+codesign --force --sign 'CCSwitcher Local Development' \
+  --keychain "$LOCAL_SIGNING_KEYCHAIN" \
+  --entitlements CCSwitcher/Resources/CCSwitcher.entitlements "$APP"
 codesign --verify --deep --strict --verbose=2 "$APP"
+codesign -dr - "$APP" 2>&1 \
+  | grep -F 'identifier "me.xueshi.ccswitcher" and certificate leaf'
 
 rm -rf build/CCSwitcher-authfix.app build/CCSwitcher-authfix.zip
 mkdir -p build

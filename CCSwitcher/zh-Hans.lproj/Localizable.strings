@@ -95,6 +95,10 @@
 "Waiting for Claude Code browser login..." = "等待 Claude Code 浏览器登录...";
 "Updating Claude Code credentials..." = "正在更新 Claude Code 凭据...";
 "Complete the login in your browser, then return here." = "请在浏览器中完成登录，然后返回此处。";
+"Open Again" = "重新打开";
+"Copy Link" = "复制链接";
+"Open the login page again" = "重新打开登录页";
+"Copy the login link" = "复制登录链接";
 "This will capture the currently logged-in Claude Code account." = "这将捕获当前已登录的 Claude Code 账户。";
 "Cancel" = "取消";
 "Add Account" = "添加账户";
@@ -146,6 +150,9 @@
 "Another Claude Code auth operation is already running." = "另一个 Claude Code 授权操作正在进行。";
 "Claude Code browser login is already in progress." = "Claude Code 浏览器登录正在进行。";
 "Claude Code auth login is still running. Finish or cancel it before switching accounts." = "Claude Code auth login 仍在运行。请先完成或取消它，再切换账号。";
+"Canceling Claude Code browser login..." = "正在取消 Claude Code 浏览器登录...";
+"Claude Code browser login canceled." = "已取消 Claude Code 浏览器登录。";
+"Login link copied. Paste it into the right browser session." = "登录链接已复制。请粘贴到正确的浏览器会话中。";
 "Capturing Claude Code account..." = "正在捕获 Claude Code 账号...";
 "Switching Claude Code account..." = "正在切换 Claude Code 账号...";
 "Claude Code active account changed. Refresh before switching again." = "Claude Code 当前账号已被外部更改。请刷新后再切换。";

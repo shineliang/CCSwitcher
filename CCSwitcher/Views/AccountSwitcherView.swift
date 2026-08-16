@@ -179,28 +179,7 @@ struct AccountSwitcherView: View {
     @ViewBuilder
     private var addAccountButtons: some View {
         if appState.isLoggingIn || appState.isAuthOperationInProgress {
-            // Logging in state
-            VStack(spacing: 8) {
-                ProgressView()
-                    .controlSize(.small)
-                Text(appState.authOperationMessage ?? String(localized: "Updating Claude Code credentials...", bundle: L10n.bundle))
-                    .font(.caption)
-                    .foregroundStyle(.textSecondary)
-                if appState.isLoggingIn {
-                    Text("Complete the login in your browser, then return here.")
-                        .font(.caption2)
-                        .foregroundStyle(.tertiary)
-                        .multilineTextAlignment(.center)
-                }
-            }
-            .frame(maxWidth: .infinity)
-            .padding(12)
-            .background(
-                RoundedRectangle(cornerRadius: 10)
-                    .fill(.cardFillStrong)
-                    .strokeBorder(.cardBorder, lineWidth: 1)
-                    .shadow(color: AppStyle.cardShadowColor, radius: AppStyle.cardShadowRadius, x: 0, y: AppStyle.cardShadowY)
-            )
+            authOperationCard
         } else if showingAddConfirm {
             // Inline confirmation for "Add Current"
             VStack(spacing: 8) {
@@ -269,5 +248,63 @@ struct AccountSwitcherView: View {
                 .buttonStyle(.plain)
             }
         }
+    }
+
+    private var authOperationCard: some View {
+        VStack(spacing: 8) {
+            ProgressView()
+                .controlSize(.small)
+
+            Text(appState.authOperationMessage ?? String(localized: "Updating Claude Code credentials...", bundle: L10n.bundle))
+                .font(.caption)
+                .foregroundStyle(.textSecondary)
+                .lineLimit(2)
+                .multilineTextAlignment(.center)
+
+            if appState.isLoggingIn {
+                Text("Complete the login in your browser, then return here.")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+                    .multilineTextAlignment(.center)
+
+                HStack(spacing: 8) {
+                    Button {
+                        appState.reopenBrowserLogin()
+                    } label: {
+                        Label("Open Again", systemImage: "safari")
+                    }
+                    .disabled(appState.authLoginURL == nil || appState.isCancelingAuthOperation)
+                    .help("Open the login page again")
+
+                    Button {
+                        appState.copyBrowserLoginURL()
+                    } label: {
+                        Label("Copy Link", systemImage: "link")
+                    }
+                    .disabled(appState.authLoginURL == nil || appState.isCancelingAuthOperation)
+                    .help("Copy the login link")
+
+                    Button(role: .cancel) {
+                        appState.cancelBrowserLogin()
+                    } label: {
+                        Label("Cancel", systemImage: "xmark.circle")
+                    }
+                    .tint(.red)
+                    .disabled(appState.isCancelingAuthOperation)
+                }
+                .font(.caption2)
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .labelStyle(.titleAndIcon)
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .padding(12)
+        .background(
+            RoundedRectangle(cornerRadius: 10)
+                .fill(.cardFillStrong)
+                .strokeBorder(.cardBorder, lineWidth: 1)
+                .shadow(color: AppStyle.cardShadowColor, radius: AppStyle.cardShadowRadius, x: 0, y: AppStyle.cardShadowY)
+        )
     }
 }

@@ -100,9 +100,12 @@ actor SessionParseCacheV2 {
     private init() {
         self.claudeProjectsDir = NSHomeDirectory() + "/.claude/projects"
 
-        let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
-            ?? URL(fileURLWithPath: NSHomeDirectory() + "/Library/Application Support")
-        let dir = appSupport.appendingPathComponent("CCSwitcher", isDirectory: true)
+        // Keep local-build caches outside ~/Library/Application Support.
+        // macOS App Data protection treats access there as temporary for a
+        // locally signed build and prompts again on every launch. This cache is
+        // fully derived from ~/.claude/projects, so rebuilding it is harmless.
+        let dir = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".ccswitcher/cache", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         self.cacheURL = dir.appendingPathComponent("session-parse-cache-v2.json")
     }
