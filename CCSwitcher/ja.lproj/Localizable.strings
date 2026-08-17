@@ -95,6 +95,13 @@
 "Waiting for Claude Code browser login..." = "Claude Code のブラウザログインを待機中...";
 "Updating Claude Code credentials..." = "Claude Code 認証情報を更新中...";
 "Complete the login in your browser, then return here." = "ブラウザでログインを完了し、ここに戻ってください。";
+"Copy the link and paste it into the browser profile you want to use." = "リンクをコピーし、使用するブラウザプロファイルに貼り付けてください。";
+"Copy the link into the browser profile you want, then paste the returned authentication code below." = "リンクを使用するブラウザプロファイルに貼り付け、返された認証コードを下に貼り付けてください。";
+"Paste authentication code" = "認証コードを貼り付け";
+"Paste Code" = "コードを貼り付け";
+"Submit Code" = "コードを送信";
+"Authentication code submitted. Waiting for Claude Code..." = "認証コードを送信しました。Claude Code を待っています...";
+"Could not send authentication code to Claude Code." = "認証コードを Claude Code に送信できませんでした。";
 "Open Again" = "再度開く";
 "Copy Link" = "リンクをコピー";
 "Open the login page again" = "ログインページを再度開く";

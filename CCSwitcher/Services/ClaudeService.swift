@@ -83,6 +83,7 @@ final class ClaudeService: @unchecked Sendable {
     /// Monotonic counter to detect out-of-order setPath completions.
     private var _setPathGeneration: UInt64 = 0
     private var _activeLoginProcess: Process?
+    private var _activeLoginInput: FileHandle?
     private var _loginCancellationRequested = false
 
     /// Currently active path. Thread-safe.
@@ -758,6 +759,34 @@ final class ClaudeService: @unchecked Sendable {
         return true
     }
 
+    /// Send the browser-returned authorization code to the active
+    /// `claude auth login` process. The code is intentionally never logged.
+    func submitActiveLoginCode(_ code: String) -> Bool {
+        let trimmed = code.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return false }
+
+        lock.lock()
+        let process = _activeLoginProcess
+        let input = _activeLoginInput
+        let isRunning = process?.isRunning == true
+        lock.unlock()
+
+        guard isRunning, let input,
+              let data = (trimmed + "\n").data(using: .utf8) else {
+            log.warning("[login] Cannot submit authorization code: no active login input")
+            return false
+        }
+
+        do {
+            try input.write(contentsOf: data)
+            log.info("[login] Authorization code submitted to active login process")
+            return true
+        } catch {
+            log.error("[login] Failed to submit authorization code: \(error.localizedDescription)")
+            return false
+        }
+    }
+
     /// Run `claude auth logout`
     func logout() async throws {
         log.info("[logout] Running `claude auth logout`...")
@@ -895,6 +924,7 @@ final class ClaudeService: @unchecked Sendable {
             DispatchQueue.global(qos: .userInitiated).async { [claudePath, args] in
                 let process = Process()
                 let pipe = Pipe()
+                let inputPipe = Pipe()
                 let outputBuffer = LockedDataBuffer()
                 let emittedLoginURLs = LockedStringDeduper()
                 var didTimeout = false
@@ -903,6 +933,7 @@ final class ClaudeService: @unchecked Sendable {
                 process.arguments = args
                 process.standardOutput = pipe
                 process.standardError = pipe
+                process.standardInput = inputPipe
 
                 var env = ProcessInfo.processInfo.environment
                 let homeDir = NSHomeDirectory()
@@ -920,6 +951,12 @@ final class ClaudeService: @unchecked Sendable {
                 let existingPath = env["PATH"] ?? "/usr/bin:/bin"
                 env["PATH"] = (extraPaths + [existingPath]).joined(separator: ":")
                 env["HOME"] = homeDir
+                // Claude Code honors BROWSER when launching the OAuth URL.
+                // CCSwitcher must not open the default browser because the user
+                // may need to paste the link into a different browser profile.
+                // `true` consumes the launch request while the CLI still prints
+                // the full authorization URL for us to capture.
+                env["BROWSER"] = "/usr/bin/true"
                 process.environment = env
 
                 pipe.fileHandleForReading.readabilityHandler = { handle in
@@ -942,6 +979,7 @@ final class ClaudeService: @unchecked Sendable {
 
                 self.lock.lock()
                 self._activeLoginProcess = process
+                self._activeLoginInput = inputPipe.fileHandleForWriting
                 self._loginCancellationRequested = false
                 self.lock.unlock()
 
@@ -971,9 +1009,11 @@ final class ClaudeService: @unchecked Sendable {
                     let wasCanceled = self._loginCancellationRequested
                     if self._activeLoginProcess === process {
                         self._activeLoginProcess = nil
+                        self._activeLoginInput = nil
                         self._loginCancellationRequested = false
                     }
                     self.lock.unlock()
+                    try? inputPipe.fileHandleForWriting.close()
 
                     let output = String(data: outputBuffer.snapshot(), encoding: .utf8) ?? ""
                     let sanitizedOutput = Self.sanitizedCLIOutput(output)
@@ -1003,9 +1043,11 @@ final class ClaudeService: @unchecked Sendable {
                     self.lock.lock()
                     if self._activeLoginProcess === process {
                         self._activeLoginProcess = nil
+                        self._activeLoginInput = nil
                         self._loginCancellationRequested = false
                     }
                     self.lock.unlock()
+                    try? inputPipe.fileHandleForWriting.close()
                     log.error("[runClaudeLogin] Process launch failed: \(error.localizedDescription)")
                     continuation.resume(throwing: ClaudeServiceError.processLaunchFailed(error))
                 }
@@ -1093,7 +1135,7 @@ final class ClaudeService: @unchecked Sendable {
     private static func sanitizedCLIOutput(_ output: String) -> String {
         var text = output
         let patterns = [
-            #"https://claude\.ai/oauth/authorize[^\s<>"']+"#,
+            Self.authorizationURLPattern,
             #"sk-ant-[A-Za-z0-9_\-]+"#,
             #"Bearer\s+[A-Za-z0-9_\.\-]+"#,
             #""accessToken"\s*:\s*"[^"]+""#,
@@ -1111,10 +1153,14 @@ final class ClaudeService: @unchecked Sendable {
         return text.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
+    // Claude Code 2.1.233 moved the OAuth page from
+    // claude.ai/oauth/... to claude.com/cai/oauth/.... Accept both shapes so
+    // older and newer installed CLI versions keep working.
+    private static let authorizationURLPattern = #"https://claude\.(?:ai|com)/(?:cai/)?oauth/authorize[^\s<>"']+"#
+
     private static func extractAuthorizationURL(from output: String) -> URL? {
         let text = strippingTerminalControlSequences(output)
-        let pattern = #"https://claude\.ai/oauth/authorize[^\s<>"']+"#
-        guard let range = text.range(of: pattern, options: .regularExpression) else {
+        guard let range = text.range(of: Self.authorizationURLPattern, options: .regularExpression) else {
             return nil
         }
         let trailingPunctuation = CharacterSet(charactersIn: ".,);]}")

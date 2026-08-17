@@ -347,19 +347,26 @@ final class AppState: ObservableObject {
         }
     }
 
-    func reopenBrowserLogin() {
-        guard let authLoginURL else { return }
-        NSWorkspace.shared.open(authLoginURL)
-        authOperationMessage = String(localized: "Waiting for Claude Code browser login...", bundle: L10n.bundle)
-        log.info("[auth] Reopened browser login URL")
-    }
-
     func copyBrowserLoginURL() {
         guard let authLoginURL else { return }
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(authLoginURL.absoluteString, forType: .string)
         authOperationMessage = String(localized: "Login link copied. Paste it into the right browser session.", bundle: L10n.bundle)
         log.info("[auth] Copied browser login URL")
+    }
+
+    @discardableResult
+    func submitBrowserLoginCode(_ code: String) -> Bool {
+        guard isLoggingIn else { return false }
+        if claudeService.submitActiveLoginCode(code) {
+            authOperationMessage = String(localized: "Authentication code submitted. Waiting for Claude Code...", bundle: L10n.bundle)
+            log.info("[auth] Submitted browser authentication code")
+            return true
+        }
+
+        errorMessage = String(localized: "Could not send authentication code to Claude Code.", bundle: L10n.bundle)
+        log.error("[auth] Failed to submit browser authentication code")
+        return false
     }
 
     func cancelBrowserLogin() {
@@ -453,12 +460,13 @@ final class AppState: ObservableObject {
             endAuthOperation()
             return
         }
-        // One credential mutation at a time (same guard as switchTo). A login
-        // entering while a switch is suspended mid-swap would back up the
-        // WRONG live credential under the old active account's id — quietly
-        // destroying that account's usable backup. Also blocks double-clicks.
-        guard !isSwitching, !isLoggingIn else {
-            log.warning("[loginNewAccount] Skipped: a switch or another login is in progress")
+        // `beginAuthOperation(..., allowBrowserLogin: true)` deliberately sets
+        // isLoggingIn before returning so the browser-login controls render.
+        // Do not test isLoggingIn here: that would reject the operation we just
+        // started. beginAuthOperation already blocks a second auth/login request.
+        guard !isSwitching else {
+            log.warning("[loginNewAccount] Skipped: an account switch is in progress")
+            endAuthOperation()
             return
         }
 
@@ -866,10 +874,12 @@ final class AppState: ObservableObject {
             endAuthOperation()
             return
         }
-        // One credential mutation at a time — see loginNewAccount for why a
-        // login during a suspended switch destroys a backup.
-        guard !isSwitching, !isLoggingIn else {
-            log.warning("[reauth] Skipped: a switch or another login is in progress")
+        // beginAuthOperation owns duplicate-login exclusion and has already set
+        // isLoggingIn for this operation. Only a credential switch still needs
+        // a defensive check here.
+        guard !isSwitching else {
+            log.warning("[reauth] Skipped: an account switch is in progress")
+            endAuthOperation()
             return
         }
 

@@ -95,6 +95,13 @@
 "Waiting for Claude Code browser login..." = "等待 Claude Code 浏览器登录...";
 "Updating Claude Code credentials..." = "正在更新 Claude Code 凭据...";
 "Complete the login in your browser, then return here." = "请在浏览器中完成登录，然后返回此处。";
+"Copy the link and paste it into the browser profile you want to use." = "复制链接，并粘贴到你要使用的浏览器配置中。";
+"Copy the link into the browser profile you want, then paste the returned authentication code below." = "将链接粘贴到目标浏览器配置中，然后把返回的验证码粘贴到下方。";
+"Paste authentication code" = "粘贴验证码";
+"Paste Code" = "粘贴验证码";
+"Submit Code" = "提交验证码";
+"Authentication code submitted. Waiting for Claude Code..." = "验证码已提交，正在等待 Claude Code...";
+"Could not send authentication code to Claude Code." = "无法将验证码提交给 Claude Code。";
 "Open Again" = "重新打开";
 "Copy Link" = "复制链接";
 "Open the login page again" = "重新打开登录页";

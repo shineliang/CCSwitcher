@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 
 /// Lists all configured accounts with switching and management.
 struct AccountSwitcherView: View {
@@ -7,6 +8,7 @@ struct AccountSwitcherView: View {
     @State private var showingAddConfirm = false
     @State private var editingAccountId: UUID?
     @State private var editingLabel = ""
+    @State private var authenticationCode = ""
 
     @Environment(\.colorScheme) private var colorScheme
 
@@ -262,20 +264,12 @@ struct AccountSwitcherView: View {
                 .multilineTextAlignment(.center)
 
             if appState.isLoggingIn {
-                Text("Complete the login in your browser, then return here.")
+                Text("Copy the link into the browser profile you want, then paste the returned authentication code below.")
                     .font(.caption2)
                     .foregroundStyle(.tertiary)
                     .multilineTextAlignment(.center)
 
                 HStack(spacing: 8) {
-                    Button {
-                        appState.reopenBrowserLogin()
-                    } label: {
-                        Label("Open Again", systemImage: "safari")
-                    }
-                    .disabled(appState.authLoginURL == nil || appState.isCancelingAuthOperation)
-                    .help("Open the login page again")
-
                     Button {
                         appState.copyBrowserLoginURL()
                     } label: {
@@ -283,6 +277,35 @@ struct AccountSwitcherView: View {
                     }
                     .disabled(appState.authLoginURL == nil || appState.isCancelingAuthOperation)
                     .help("Copy the login link")
+                }
+                .font(.caption2)
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .labelStyle(.titleAndIcon)
+
+                TextField("Paste authentication code", text: $authenticationCode)
+                    .textFieldStyle(.roundedBorder)
+                    .font(.caption.monospaced())
+                    .disabled(appState.isCancelingAuthOperation)
+                    .onSubmit { submitAuthenticationCode() }
+
+                HStack(spacing: 8) {
+                    Button {
+                        pasteAuthenticationCode()
+                    } label: {
+                        Label("Paste Code", systemImage: "doc.on.clipboard")
+                    }
+                    .disabled(appState.isCancelingAuthOperation)
+
+                    Button {
+                        submitAuthenticationCode()
+                    } label: {
+                        Label("Submit Code", systemImage: "paperplane")
+                    }
+                    .disabled(
+                        authenticationCode.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                            || appState.isCancelingAuthOperation
+                    )
 
                     Button(role: .cancel) {
                         appState.cancelBrowserLogin()
@@ -306,5 +329,15 @@ struct AccountSwitcherView: View {
                 .strokeBorder(.cardBorder, lineWidth: 1)
                 .shadow(color: AppStyle.cardShadowColor, radius: AppStyle.cardShadowRadius, x: 0, y: AppStyle.cardShadowY)
         )
+    }
+
+    private func pasteAuthenticationCode() {
+        guard let value = NSPasteboard.general.string(forType: .string) else { return }
+        authenticationCode = value.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func submitAuthenticationCode() {
+        guard appState.submitBrowserLoginCode(authenticationCode) else { return }
+        authenticationCode = ""
     }
 }
